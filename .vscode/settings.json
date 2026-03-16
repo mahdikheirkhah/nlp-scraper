@@ -1,7 +1,0 @@
-{
-    "python.defaultInterpreterPath": "/Users/mohammad.kheirkhah/Desktop/nlp-scraper/ex00/bin/python",
-    "jupyter.jupyterServerType": "local",
-    "jupyter.notebookEditor.defaultKernel": ".jupyter/kernels/ex00",
-    "python.terminal.activateEnvInSelectedTerminal": true,
-    "jupyter.jupyterServerEndpoint": "http://localhost:8891/?token=f43344f280355610994d85069358fdc85c8d1a1fcaf91129"
-}
