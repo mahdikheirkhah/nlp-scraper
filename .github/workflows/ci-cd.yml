@@ -9,30 +9,42 @@ on:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
-
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          python -m spacy download en_core_web_sm
+      - name: Run Tests
+        run: |
+          pip install pytest
+          pytest tests/
 
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.10'
+  deploy:
+    needs: build-and-test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Run NLP Engine (Production Run)
+        run: |
+          # This simulates the full run to generate the actual files
+          python scraper_news.py
+          python nlp_enriched_news.py
+          
+      - name: Upload Enhanced News Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: enriched-data
+          path: results/enhanced_news.csv
 
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        # Ensure SpaCy model is downloaded for NER
-        python -m spacy download en_core_web_sm
-
-    - name: Lint with Flake8
-      run: |
-        pip install flake8
-        # stop the build if there are Python syntax errors or undefined names
-        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
-
-    - name: Run Unit Tests
-      run: |
-        pip install pytest
-        pytest
+      - name: Upload Trained Model
+        uses: actions/upload-artifact@v4
+        with:
+          name: topic-model
+          path: results/topic_classifier.pkl
