@@ -8,45 +8,40 @@ from cryptography.hazmat.primitives import serialization
 
 load_dotenv()
 
-def get_snowflake_engine() -> Engine:
+def get_snowflake_engine() -> Optional[Engine]:
     """
     Creates a Snowflake SQLAlchemy engine using RSA Private Key authentication.
     
     Returns:
-        Engine: SQLAlchemy engine configured for Snowflake.
+        Optional[Engine]: SQLAlchemy engine if successful, None if connection fails.
     """
-    # Prepare the private key bytes from .env string
-    p_key_raw = os.getenv("SNOWFLAKE_PRIVATE_KEY").replace("\\n", "\n").encode()
-    
-    p_key_obj = serialization.load_pem_private_key(
-        p_key_raw,
-        password=None,
-        backend=default_backend()
-    )
+    try:
+        p_key_raw = os.getenv("SNOWFLAKE_PRIVATE_KEY").replace("\\n", "\n").encode()
+        p_key_obj = serialization.load_pem_private_key(
+            p_key_raw, password=None, backend=default_backend()
+        )
+        p_key_der = p_key_obj.private_bytes(
+            encoding=serialization.Encoding.DER,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption()
+        )
 
-    p_key_der = p_key_obj.private_bytes(
-        encoding=serialization.Encoding.DER,
-        format=serialization.PrivateFormat.PKCS8,
-        encryption_algorithm=serialization.NoEncryption()
-    )
-
-    # Build the connection URL
-    # Snowflake uses the 'database' and 'schema' as query parameters in SQLAlchemy
-    connection_url = URL.create(
-        drivername="snowflake",
-        username=os.getenv("SNOWFLAKE_USER"),
-        host=os.getenv("SNOWFLAKE_ACCOUNT"),
-        query={
-            "database": "NEWS_DB",
-            "schema": "RAW",
-            "warehouse": "NEWS_WH" # Added this to ensure compute is available
-        }
-    )
-
-    return create_engine(
-        connection_url,
-        connect_args={'private_key': p_key_der}
-    )
+        connection_url = URL.create(
+            drivername="snowflake",
+            username=os.getenv("SNOWFLAKE_USER"),
+            host=os.getenv("SNOWFLAKE_ACCOUNT"),
+            query={
+                "database": "NEWS_DB",
+                "schema": "RAW",
+                "warehouse": "NEWS_WH"
+            }
+        )
+        return create_engine(connection_url, connect_args={'private_key': p_key_der})
+    except Exception as e:
+        # Explaining why: Connection errors are critical but shouldn't 
+        # crash the initialization of the service.
+        print(f"Error creating Snowflake engine: {e}")
+        return None
 # Usage
 engine = get_snowflake_engine()
 with engine.connect() as conn:

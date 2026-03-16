@@ -31,18 +31,16 @@ def parse_article_content(html: str) -> Dict[str, str]:
         
     Returns:
         Dict[str, str]: A dictionary containing 'headline' and 'body'.
-    """
-    soup = BeautifulSoup(html, 'html.parser')
-    
-    # Explaining why: We use .get_text() with strip to ensure the database 
-    # doesn't store unnecessary whitespace or HTML tags.
-    headline = soup.find('h1').get_text(strip=True) if soup.find('h1') else "No Headline"
-    
-    # Note: You may need to adjust the 'p' tag logic based on the specific site structure.
-    paragraphs = soup.find_all('p')
-    body = " ".join([p.get_text(strip=True) for p in paragraphs])
-    
-    return {
-        "headline": headline,
-        "body": body
     }
+    """
+    try:
+        soup = BeautifulSoup(html, 'html.parser')
+        headline = soup.find('h1').get_text(strip=True) if soup.find('h1') else "No Headline"
+        paragraphs = soup.find_all('p')
+        body = " ".join([p.get_text(strip=True) for p in paragraphs])
+        return {"headline": headline, "body": body}
+    except Exception as e:
+        # Explaining why: Malformed HTML shouldn't stop the scraper from moving 
+        # to the next article in the list.
+        print(f"Error parsing HTML content: {e}")
+        return {"headline": "Error", "body": ""}
