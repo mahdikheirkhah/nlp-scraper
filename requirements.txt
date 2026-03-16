@@ -103,6 +103,7 @@ PyJWT==2.12.1
 pyOpenSSL==25.3.0
 pyparsing==3.3.2
 python-dateutil==2.9.0.post0
+python-dotenv==1.2.2
 python-json-logger==4.0.0
 pytz==2026.1.post1
 PyYAML==6.0.3
