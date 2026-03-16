@@ -5,46 +5,83 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+  # This allows you to run manually and set flags
+  workflow_dispatch:
+    inputs:
+      run_tests:
+        description: 'Run Unit Tests'
+        required: true
+        type: boolean
+        default: true
+      run_deploy:
+        description: 'Run Deployment/Artifact Generation'
+        required: true
+        type: boolean
+        default: false
 
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.11.1'
+
       - name: Install dependencies
         run: |
+          python -m pip install --upgrade pip
           pip install -r requirements.txt
           python -m spacy download en_core_web_sm
-      - name: Run Tests
+
+      # This step only runs if the flag is TRUE or if it's a standard Push/PR
+      - name: Run Unit Tests
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.run_tests == true }}
         run: |
           pip install pytest
           pytest tests/
 
   deploy:
     needs: build-and-test
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # Only deploy on main, AND if the deploy flag is true
+    if: |
+      github.ref == 'refs/heads/main' && 
+      (github.event_name != 'workflow_dispatch' || inputs.run_deploy == true)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       
-      - name: Run NLP Engine (Production Run)
+      - name: Run NLP Engine
         run: |
-          # This simulates the full run to generate the actual files
           python scraper_news.py
           python nlp_enriched_news.py
           
-      - name: Upload Enhanced News Artifact
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: enriched-data
-          path: results/enhanced_news.csv
+          name: project-outputs
+          path: |
+            results/enhanced_news.csv
+            results/topic_classifier.pkl
+  
+  rollback:
+    needs: [build-and-test, deploy]
+    # This job only runs if either previous job fails
+    if: failure() && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Rollback Notification
+        run: |
+          echo "Pipeline Failed! Deployment halted."
+          echo "The 'enhanced_news.csv' and 'topic_classifier.pkl' have not been updated."
+          # In a real-world scenario, you could trigger a Slack notification 
+          # or a script to revert a database migration here.
 
-      - name: Upload Trained Model
-        uses: actions/upload-artifact@v4
+      - name: Fetch Last Successful Artifact
+        uses: actions/download-artifact@v4
         with:
-          name: topic-model
-          path: results/topic_classifier.pkl
+          name: project-outputs
+          # This pulls the LAST version that was successfully uploaded
+          # so your local workspace or downstream services stay stable.
