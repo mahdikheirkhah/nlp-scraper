@@ -1,5 +1,5 @@
 import os
-import os
+from typing import Optional
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, Engine, text
 from sqlalchemy.engine.url import URL
