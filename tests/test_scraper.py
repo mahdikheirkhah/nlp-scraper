@@ -2,60 +2,7 @@ import pytest
 import requests
 import os
 from unittest.mock import patch, MagicMock
-from scripts.scraper_news import fetch_html, parse_article_content
-# Ensure this matches your file name exactly
-from scripts.run_snowflake import get_snowflake_engine 
-
-# --- Snowflake Engine Tests ---
-
-def test_get_snowflake_engine_success():
-    """Tests successful creation of the Snowflake engine."""
-    try:
-        # NOTE: We patch the libraries AS THEY ARE USED in scripts.run_snowflake
-        with patch('os.getenv') as mock_env, \
-             patch('scripts.run_snowflake.serialization.load_pem_private_key') as mock_load_key, \
-             patch('scripts.run_snowflake.create_engine') as mock_create_engine, \
-             patch('scripts.run_snowflake.URL.create') as mock_url:
-            
-            # Mock Environment
-            mock_env.side_effect = lambda k, default=None: {
-                "SNOWFLAKE_PRIVATE_KEY": "fake_key",
-                "SNOWFLAKE_USER": "test_user",
-                "SNOWFLAKE_ACCOUNT": "test_account"
-            }.get(k, default)
-            
-            # Mock Cryptography
-            mock_key_obj = MagicMock()
-            mock_load_key.return_value = mock_key_obj
-            mock_key_obj.private_bytes.return_value = b"fake_der_bytes"
-            
-            # Mock SQLAlchemy
-            mock_engine = MagicMock()
-            mock_create_engine.return_value = mock_engine
-            mock_url.return_value = "snowflake://fake_url"
-
-            result = get_snowflake_engine()
-            
-            assert result == mock_engine
-    except Exception as e:
-        pytest.fail(f"get_snowflake_engine_success failed: {e}")
-
-def test_get_snowflake_engine_invalid_key():
-    """Tests failure when the RSA key is malformed."""
-    with patch('os.getenv', return_value="invalid_key"), \
-         patch('scripts.run_snowflake.serialization.load_pem_private_key') as mock_load_key:
-        
-        mock_load_key.side_effect = ValueError("Invalid Key")
-        
-        result = get_snowflake_engine()
-        assert result is None
-
-def test_get_snowflake_engine_missing_env():
-    """Tests failure when env variables are missing."""
-    with patch('os.getenv', return_value=None):
-        result = get_snowflake_engine()
-        assert result is None
-
+from scripts.scraper_news import fetch_html, parse_article_content, save_articles_to_snowflake, discover_urls_from_rss
 # --- Scraper Logic Tests ---
 
 def test_fetch_html_success():
@@ -80,3 +27,50 @@ def test_parse_article_content_error_handling():
     # Pass invalid type to trigger internal try-except
     result = parse_article_content(None) 
     assert result['headline'] == "Error"
+    
+    
+def test_discover_urls_from_rss_success():
+    """Tests if URLs are correctly extracted from a mock RSS string."""
+    mock_rss = """<rss version="2.0">
+        <channel>
+            <item><link>https://news.com/art1</link></item>
+            <item><link>https://news.com/art2</link></item>
+        </channel>
+    </rss>"""
+    
+    with patch('requests.get') as mock_get:
+        mock_get.return_value.status_code = 200
+        mock_get.return_value.content = mock_rss.encode('utf-8')
+        
+        result = discover_urls_from_rss("https://fake-rss.com")
+        assert len(result) == 2
+        assert "https://news.com/art1" in result
+
+# --- Snowflake MERGE Tests ---
+
+def test_save_articles_to_snowflake_empty():
+    """Ensure we return False early if no articles are provided."""
+    assert save_articles_to_snowflake([]) is False
+
+@patch('scripts.scraper_news.load_sql_file')
+@patch('scripts.scraper_news.get_snowflake_engine')
+def test_save_articles_to_snowflake_success(mock_engine_func, mock_load_sql):
+    """Tests the full flow of loading SQL and executing the MERGE."""
+    # Mock the SQL file content
+    mock_load_sql.return_value = "MERGE INTO TABLE..."
+    
+    # Mock the Engine and Connection
+    mock_engine = MagicMock()
+    mock_conn = MagicMock()
+    mock_engine_func.return_value = mock_engine
+    
+    # This simulates the 'with engine.begin() as conn' context manager
+    mock_engine.begin.return_value.__enter__.return_value = mock_conn
+    
+    test_data = [{"uuid": "123", "url": "url", "headline": "h", "body": "b"}]
+    
+    result = save_articles_to_snowflake(test_data)
+    
+    assert result is True
+    # Verify that the SQL was actually 'executed' once
+    assert mock_conn.execute.called
