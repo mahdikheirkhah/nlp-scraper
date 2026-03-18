@@ -1,8 +1,13 @@
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import uuid
 import requests
 from bs4 import BeautifulSoup
 from typing import Optional, Dict, List
 import time
 from sqlalchemy import text
+import xml.etree.ElementTree as ET
 from scripts.run_snowflake import get_snowflake_engine
 
 def fetch_html(url: str) -> Optional[str]:
@@ -49,111 +54,108 @@ def parse_article_content(html: str) -> Dict[str, str]:
         return {"headline": "Error", "body": ""}
 
 
-
-def discover_urls(archive_url: str, target_count: int = 300) -> List[str]:
-    """
-    Crawls an index/archive page to collect a list of unique article URLs.
-    
-    Arguments:
-        archive_url (str): The starting URL (e.g., a 'Latest News' or 'Archive' page).
-        target_count (int): The number of unique URLs to collect. Defaults to 300.
-
-    Returns:
-        List[str]: A list of unique strings representing article URLs.
-    """
-    found_urls = set()
-    page = 1
-    
-    try:
-        while len(found_urls) < target_count:
-            # Handle pagination (example: ?page=1)
-            current_url = f"{archive_url}?page={page}"
-            print(f"Searching for links on: {current_url}")
-            
-            html = fetch_html(current_url)
-            if not html:
-                break
-                
-            soup = BeautifulSoup(html, 'html.parser')
-            # Look for links that contain news patterns
-            for link in soup.find_all('a', href=True):
-                href = link['href']
-                # Filtering logic: ensures it's an article and not a category link
-                if "/articles/" in href or "/story/" in href:
-                    # Construct full URL if relative
-                    full_path = href if href.startswith('http') else f"https://news-site.com{href}"
-                    found_urls.add(full_path)
-                
-                if len(found_urls) >= target_count:
-                    break
-            
-            page += 1
-            if page > 20: # Safety break to prevent infinite loops
-                break
-    except Exception as e:
-        print(f"Error during URL discovery: {e}")
-        
-    return list(found_urls)
+def load_sql_file(file_path: str):
+    """Reads a .sql file and returns the query as a string."""
+    with open(file_path, 'r') as f:
+        return f.read()
 
 def save_articles_to_snowflake(articles: List[Dict]):
-    """
-    Performs a bulk insert of scraped data into the Snowflake RAW table.
-    
-    Arguments:
-        articles (List[Dict]): A list of dictionaries, where each dict contains 
-                               'url', 'headline', and 'body'.
-
-    Returns:
-        bool: True if insertion was successful, False otherwise.
-    """
     if not articles:
-        print("No articles to save.")
         return False
 
     engine = get_snowflake_engine()
     if not engine:
         return False
 
-    query = text("""
-        INSERT INTO NEWS_DB.RAW.ARTICLES (URL, HEADLINE, BODY, SCRAPED_AT)
-        VALUES (:url, :headline, :body, CURRENT_TIMESTAMP())
-    """)
+    # Load the query from the external file
+    query_text = load_sql_file('sql/02_merge_articles.sql')
+    merge_query = text(query_text)
 
     try:
         with engine.begin() as conn:
-            # executemany is efficient for 300+ records
-            conn.execute(query, articles)
-            print(f"Successfully ingested {len(articles)} articles into Snowflake.")
+            # Snowflake handles the looping over 'articles' automatically
+            conn.execute(merge_query, articles)
+            print(f"Successfully processed {len(articles)} articles through MERGE.")
             return True
     except Exception as e:
-        print(f"Failed to save to Snowflake: {e}")
+        print(f"Error during Snowflake merge: {e}")
         return False
+
+def discover_urls_from_rss(rss_url: str, target_count: int = 300) -> List[str]:
+    """
+    Parses an RSS feed to extract article URLs.
+    
+    Arguments:
+        rss_url (str): The BBC RSS feed URL.
+        target_count (int): Maximum number of URLs to collect.
+        
+    Returns:
+        List[str]: A list of unique article URLs found in the feed.
+    """
+    article_urls = []
+    try:
+        response = requests.get(rss_url, timeout=10)
+        response.raise_for_status()
+        
+        # Parse the XML content
+        root = ET.fromstring(response.content)
+        
+        # In RSS, each article is inside an <item> tag
+        for item in root.findall('.//item'):
+            link = item.find('link').text
+            if link and link not in article_urls:
+                article_urls.append(link)
+            
+            if len(article_urls) >= target_count:
+                break
+                
+        print(f"Found {len(article_urls)} articles in the RSS feed.")
+    except Exception as e:
+        print(f"Error parsing RSS feed: {e}")
+        
+    return article_urls
 
 def run_ingestion_pipeline():
     """
-    Orchestrates the discovery, scraping, and storage of 300 articles.
+    Orchestrates ingestion from multiple feeds to reach the 300-article goal.
     """
-    print("Starting Phase 1 Ingestion...")
+    feeds = [
+            "http://feeds.bbci.co.uk/news/business/rss.xml",
+            "http://feeds.bbci.co.uk/news/technology/rss.xml",
+            "http://feeds.bbci.co.uk/news/world/rss.xml",
+            "http://feeds.bbci.co.uk/news/science_and_environment/rss.xml",
+            "http://feeds.bbci.co.uk/news/politics/rss.xml", 
+            "http://feeds.bbci.co.uk/news/world/us_and_canada/rss.xml",
+            "http://feeds.bbci.co.uk/news/entertainment_and_arts/rss.xml",
+            "http://feeds.bbci.co.uk/news/education/rss.xml",
+            "https://moxie.foxnews.com/google-publisher/latest.xml",
+            "https://moxie.foxnews.com/google-publisher/politics.xml",
+            "https://moxie.foxnews.com/google-publisher/health.xml",
+            "https://moxie.foxnews.com/google-publisher/science.xml",
+            "https://moxie.foxnews.com/google-publisher/tech.xml"
+    ]
     
-    # 1. Discover URLs
-    base_archive = "https://news-site.com/archive" # Replace with real target
-    urls = discover_urls(base_archive, target_count=300)
+    all_urls = []
+    for feed in feeds:
+        urls = discover_urls_from_rss(feed, target_count=150) # Take 150 from each
+        all_urls.extend(urls)
     
+    # Remove duplicates between different feeds
+    unique_urls = list(set(all_urls))[:350] 
+    print(f"Total unique URLs to scrape: {len(unique_urls)}")
+
     scraped_data = []
-    
-    # 2. Scrape individual content
-    for i, url in enumerate(urls):
-        print(f"Scraping [{i+1}/300]: {url}")
+    for i, url in enumerate(unique_urls):
+        print(f"Scraping [{i+1}/{len(unique_urls)}]: {url}")
         html = fetch_html(url)
         if html:
             content = parse_article_content(html)
-            content['url'] = url # Add URL to the dict for the DB insert
+            content['url'] = url
+            # ADD THIS LINE: Generate a unique ID for every article here
+            content['uuid'] = str(uuid.uuid4()) 
             scraped_data.append(content)
-        
-        # Be a polite scraper!
-        time.sleep(1) 
+        time.sleep(1.0)
 
-    # 3. Save to Snowflake
     save_articles_to_snowflake(scraped_data)
 
 if __name__ == "__main__":
