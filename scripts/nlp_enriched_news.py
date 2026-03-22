@@ -96,19 +96,25 @@ class NewsNLPPipeline:
     def process_article(self, raw_body: str, headline: str = "") -> Dict[str, Any]:
         """Task 2.4 & Phase 3 Integration."""
         try:
-            if not raw_body:
-                return {"sentence_count": 0, "orgs": [], "topic": "Unknown", "processed_text": ""}
+            # Handle empty inputs gracefully
+            if not raw_body and not headline:
+                return {"sentence_count": 0, "orgs": [], "topic": "Unknown", "processed_text": "", "clean_tokens": []}
 
-            # Full text for intelligence tasks
-            full_content = f"{headline} {raw_body}".strip()
+            # 💡 FIX: Create a single unified text for the entire pipeline
+            clean_headline = (headline or "").strip()
+            if clean_headline and not clean_headline.endswith(('.', '!', '?')):
+                clean_headline += "."
+            
+            full_content = f"{clean_headline} {(raw_body or '').strip()}".strip()
 
-            # 1. Base Preprocessing (Phase 2)
-            sentences = sent_tokenize(raw_body)
-            normalized = self.normalize_text(raw_body)
+            # 1. Base Preprocessing (Now using full_content)
+            # This ensures 'APPLE' from the headline gets normalized and stemmed
+            sentences = sent_tokenize(full_content)
+            normalized = self.normalize_text(full_content)
             tokens = self.tokenize_and_remove_stop_words(normalized)
             stemmed_tokens = self.apply_stemming(tokens)
             
-            # 2. Information Extraction (Phase 3)
+            # 2. Information Extraction (Intelligence)
             orgs = self.extract_organizations(full_content)
             topic = self.predict_topic(full_content)
             
@@ -123,6 +129,8 @@ class NewsNLPPipeline:
         except Exception as e:
             print(f"General error in NLP pipeline: {e}")
             return {"error": str(e)}
+
+
 
 if __name__ == "__main__":
     # Ensure you have results/topic_classifier.pkl before running
