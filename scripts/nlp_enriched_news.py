@@ -29,20 +29,47 @@ except OSError:
 
 class NewsNLPPipeline:
     def __init__(self, model_path='results/topic_classifier.pkl'):
-        try:
-            self.stop_words = set(stopwords.words('english'))
-            self.stemmer = PorterStemmer()
-            
-            # Load the Topic Classifier (Task 3.2)
-            if os.path.exists(model_path):
-                with open(model_path, 'rb') as f:
-                    self.topic_model = pickle.load(f)
-            else:
-                self.topic_model = None
-                print(f"Warning: {model_path} not found. Topic detection will be disabled.")
-        except Exception as e:
-            print(f"Error initializing NLP components: {e}")
-            self.stop_words = set()
+        self.stop_words = set(stopwords.words('english'))
+        self.stemmer = PorterStemmer()
+        self.sia = SentimentIntensityAnalyzer()
+        
+        # Task 4.2: Define Environmental Scandal Keywords
+        self.scandal_keywords = [
+            nlp("environmental disaster"),
+            nlp("oil spill"),
+            nlp("toxic waste leakage"),
+            nlp("pollution lawsuit"),
+            nlp("illegal dumping"),
+            nlp("carbon emission fraud")
+        ]
+
+        # Load Topic Model
+        if os.path.exists(model_path):
+            with open(model_path, 'rb') as f:
+                self.topic_model = pickle.load(f)
+        else:
+            self.topic_model = None
+
+    def analyze_sentiment(self, text: str) -> float:
+        """Task 4.1: Get compound sentiment score (-1 to 1)."""
+        return self.sia.polarity_scores(text)['compound']
+
+    def calculate_scandal_score(self, sentences: List[str], orgs: List[str]) -> float:
+        """Task 4.3 & 4.4: Calculate distance to disaster keywords."""
+        if not orgs or not sentences:
+            return 0.0
+        
+        max_similarity = 0.0
+        # Find sentences that actually mention one of our detected companies
+        for sent in sentences:
+            if any(org.lower() in sent.lower() for org in orgs):
+                sent_doc = nlp(sent)
+                # Compare sentence vector to each risk keyword vector
+                for keyword in self.scandal_keywords:
+                    sim = sent_doc.similarity(keyword)
+                    if sim > max_similarity:
+                        max_similarity = sim
+        return round(max_similarity, 4)
 
     def normalize_text(self, text: str) -> str:
         """Task 2.1: Lowercasing and punctuation removal."""
@@ -94,42 +121,36 @@ class NewsNLPPipeline:
         return "Unknown"
 
     def process_article(self, raw_body: str, headline: str = "") -> Dict[str, Any]:
-        """Task 2.4 & Phase 3 Integration."""
-        try:
-            # Handle empty inputs gracefully
-            if not raw_body and not headline:
-                return {"sentence_count": 0, "orgs": [], "topic": "Unknown", "processed_text": "", "clean_tokens": []}
+        """Full Phase 4 Intelligence Pipeline."""
+        clean_headline = (headline or "").strip()
+        if clean_headline and not clean_headline.endswith(('.', '!', '?')):
+            clean_headline += "."
+        
+        full_content = f"{clean_headline} {(raw_body or '').strip()}".strip()
+        sentences = sent_tokenize(full_content)
+        
+        # 1. Base Logic
+        normalized = self.normalize_text(full_content)
+        # 2. Topic & NER
+        orgs = self.extract_organizations(full_content)
+        topic = self.predict_topic(full_content)
+        
+        # 3. Phase 4 Intelligence
+        sentiment = self.analyze_sentiment(full_content)
+        scandal_score = self.calculate_scandal_score(sentences, orgs)
+        
+        # Risk Logic: High Scandal + Low Sentiment = High Risk
+        is_scandal = True if (scandal_score > 0.7 and sentiment < 0) else False
 
-            # 💡 FIX: Create a single unified text for the entire pipeline
-            clean_headline = (headline or "").strip()
-            if clean_headline and not clean_headline.endswith(('.', '!', '?')):
-                clean_headline += "."
-            
-            full_content = f"{clean_headline} {(raw_body or '').strip()}".strip()
-
-            # 1. Base Preprocessing (Now using full_content)
-            # This ensures 'APPLE' from the headline gets normalized and stemmed
-            sentences = sent_tokenize(full_content)
-            normalized = self.normalize_text(full_content)
-            tokens = self.tokenize_and_remove_stop_words(normalized)
-            stemmed_tokens = self.apply_stemming(tokens)
-            
-            # 2. Information Extraction (Intelligence)
-            orgs = self.extract_organizations(full_content)
-            topic = self.predict_topic(full_content)
-            
-            return {
-                "sentence_count": len(sentences),
-                "clean_tokens": tokens,
-                "stemmed_tokens": stemmed_tokens,
-                "processed_text": " ".join(stemmed_tokens),
-                "orgs": orgs,
-                "topic": topic
-            }
-        except Exception as e:
-            print(f"General error in NLP pipeline: {e}")
-            return {"error": str(e)}
-
+        return {
+            "topic": topic,
+            "orgs": orgs,
+            "sentiment": sentiment,
+            "scandal_distance": scandal_score,
+            "is_flagged": is_scandal,
+            "sentence_count": len(sentences),
+            "processed_text": " ".join(self.apply_stemming(self.tokenize_and_remove_stop_words(normalized)))
+        }
 
 
 if __name__ == "__main__":
