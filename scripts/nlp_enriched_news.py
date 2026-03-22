@@ -41,7 +41,7 @@ class NewsNLPPipeline:
         self.stemmer = PorterStemmer()
         self.sia = SentimentIntensityAnalyzer()
         
-        self.SIMILARITY_THRESHOLD = 0.88  # Very High. Requires the sentence to be almost a direct match to a scandal.
+        self.SIMILARITY_THRESHOLD = 0.85  # Very High. Requires the sentence to be almost a direct match to a scandal.
         self.SENTIMENT_THRESHOLD = -0.6   # Very Negative. Filters out "bad news" and keeps "disastrous news."
         
         # Task 4.1: TRIPWIRE_WORDS (The "Hard" Check)
