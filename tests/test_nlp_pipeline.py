@@ -123,3 +123,96 @@ def test_none_input(pipeline):
     assert pipeline.normalize_text(None) == ""
     # predict_topic returns Unknown for None
     assert pipeline.predict_topic(None) == "Unknown"
+    
+    
+def test_scandal_flagging_positive(pipeline):
+    """Scenario: A clear high-risk scandal should be flagged with strict sentiment."""
+    # We use "Fraud", "Criminal", and "Disaster" because VADER knows these are very negative.
+    headline = "Microsoft Corp Criminal Fraud Investigation"
+    body = (
+        "Authorities have launched a criminal investigation into Microsoft Corp for massive "
+        "financial fraud and illegal embezzlement. The company is facing a catastrophic disaster "
+        "after billions of dollars were stolen in a horrific corruption scandal."
+    )
+    
+    result = pipeline.process_article(body, headline)
+    
+    # Debugging help
+    print(f"\n--- Scandal Test Results ---")
+    print(f"Similarity Score: {result['scandal_distance']}")
+    print(f"Sentiment Score: {result['sentiment']}")
+    print(f"Is Flagged: {result['is_flagged']}")
+
+    # Check if the logic caught it
+    assert result["is_flagged"] is True
+    assert result["scandal_distance"] >= pipeline.SIMILARITY_THRESHOLD
+    assert result["sentiment"] <= pipeline.SENTIMENT_THRESHOLD
+
+def test_scandal_flagging_negative_news_but_no_scandal(pipeline):
+    """Scenario: Sad news that isn't a 'scandal' should NOT be flagged."""
+    # Sad news about stock, but not a crime/disaster
+    text = "Apple shares dropped slightly today as investors expressed concern over global sales."
+    result = pipeline.process_article(text)
+    
+    # Should be clean because similarity to "scandal themes" should be low
+    assert result["is_flagged"] is False
+
+def test_org_blacklist_logic(pipeline):
+    """Scenario: Political noise like 'The Government' should be ignored."""
+    # A sentence that looks like a scandal but involves a blacklisted ORG
+    text = "The Government was accused of bribery and corruption in the new report."
+    result = pipeline.process_article(text)
+    
+    # Since 'The Government' is blacklisted, scandal_score should be 0.0
+    assert result["scandal_distance"] == 0.0
+    assert result["is_flagged"] is False
+
+def test_short_sentence_penalty(pipeline):
+    """Scenario: Very short sentences should be penalized even if they contain bad words."""
+    # "Apple fraud." is very short.
+    text = "Apple fraud." 
+    result = pipeline.process_article(text)
+    
+    # The length_multiplier 0.5 should keep this score low
+    assert result["scandal_distance"] < 1.0
+    assert result["is_flagged"] is False
+
+def test_trigger_sentence_sentiment(pipeline):
+    """Verify that sentiment is calculated on the trigger, not the whole article."""
+    headline = "Tesla opens new factory." # Very positive
+    body = "The company is growing. However, Tesla was sued for massive financial fraud in court." # Very negative
+    
+    result = pipeline.process_article(body, headline)
+    
+    # The 'trigger' is the fraud sentence, so sentiment should be negative
+    # even though the headline was positive.
+    assert result["sentiment"] < 0
+    assert "sued" in result["trigger_sentence"]
+
+def test_tripwire_word_boost(pipeline):
+    """Verify that specific words from TRIPWIRE_WORDS increase the score."""
+    text_normal = "Facebook is discussing new data policies."
+    text_risky = "Facebook is facing a massive data breach." # 'breach' is a tripwire
+    
+    res_normal = pipeline.process_article(text_normal)
+    res_risky = pipeline.process_article(text_risky)
+    
+    assert res_risky["scandal_distance"] > res_normal["scandal_distance"]
+
+def test_no_org_no_scandal(pipeline):
+    """If no organization is found, no scandal can be flagged."""
+    text = "A massive data breach happened somewhere in the world involving fraud."
+    result = pipeline.process_article(text)
+    
+    assert result["scandal_distance"] == 0.0
+    assert result["is_flagged"] is False
+
+def test_high_similarity_neutral_sentiment(pipeline):
+    """Scenario: High similarity but neutral/positive sentiment shouldn't flag."""
+    # A training exercise or a book title about scandals
+    text = "Google released a documentary about how to prevent Corporate Embezzlement."
+    result = pipeline.process_article(text)
+    
+    # High similarity to 'Embezzlement' theme, but sentiment is likely not <= -0.6
+    if result["sentiment"] > pipeline.SENTIMENT_THRESHOLD:
+        assert result["is_flagged"] is False
