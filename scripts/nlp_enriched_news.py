@@ -1,8 +1,11 @@
+from pydoc import text
+
 import nltk
 import re
 import string
 import sys
 from typing import List, Dict, Any
+import spacy
 
 # Ensure resources are available
 try:
@@ -12,11 +15,17 @@ except LookupError:
     nltk.download('punkt')
     nltk.download('stopwords')
     nltk.download('punkt_tab')
-
+    
 from nltk.tokenize import word_tokenize, sent_tokenize
 from nltk.corpus import stopwords
 from nltk.stem import PorterStemmer
 
+try:
+    nlp = spacy.load("en_core_web_sm")
+except OSError:
+    from spacy.cli import download
+    download("en_core_web_sm")
+    nlp = spacy.load("en_core_web_sm")
 class NewsNLPPipeline:
     def __init__(self):
         try:
@@ -59,7 +68,13 @@ class NewsNLPPipeline:
         except Exception as e:
             print(f"Error in stemming: {e}")
             return tokens
-
+    def extract_organizations(self, text: str) -> list:
+        """Task 3.1: Extract ORG entities using SpaCy."""
+        if not text: return []
+        doc = nlp(text)
+        # Extract only unique Organization names
+        orgs = list({ent.text for ent in doc.ents if ent.label_ == "ORG"})
+        return orgs
     def process_article(self, raw_body: str) -> Dict[str, Any]:
         """Task 2.4: Final preprocessing pipeline function."""
         try:
