@@ -17,7 +17,6 @@ jobs:
   build-and-test:
     runs-on: ubuntu-latest
     
-    # Injecting Snowflake secrets so the engine initialization can be tested
     env:
       SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
       SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
@@ -30,35 +29,50 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version-file: '.python-version'
+          python-version: '3.11' # Explicitly set or use file
           cache: 'pip'
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          # Professional practice: install spaCy model here if not in requirements.txt
-          python -m spacy download en_core_web_sm
+          # 🚨 CRITICAL: Must use 'md' model for your 0.85 similarity logic to work
+          python -m spacy download en_core_web_md
 
       - name: Run Unit Tests
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.run_tests == true }}
         run: |
-          # We run module-style to ensure 'scripts' is in the python path
-          python -m pytest tests/
+          # Use -v for verbose output so you see which tests pass/fail in logs
+          python -m pytest tests/ -v
 
-  deploy:
+  deploy-and-report:
     needs: build-and-test
+    # Only deploy on main branch pushes
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
-      - name: Run Scraper & NLP Engine
+      - name: Run Full Analysis & Generate Reports
         env:
           SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
           SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
           SNOWFLAKE_PRIVATE_KEY: ${{ secrets.SNOWFLAKE_PRIVATE_KEY }}
         run: |
-          # Executes the ingestion to Snowflake
+          pip install -r requirements.txt
+          python -m spacy download en_core_web_md
+          # 1. Run the Scraper to get fresh data
           python scripts/scraper_news.py
+          # 2. Run the NLP Engine to generate the CSV and Plots
+          python scripts/process_snowflake_news.py
+
+      - name: Archive Final Reports
+        uses: actions/upload-artifact@v6
+        with:
+          name: nlp-intelligence-reports
+          path: |
+            enhanced_news.csv
+            topic_distribution.png
+            risk_distribution.png
+          retention-days: 7
