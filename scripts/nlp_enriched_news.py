@@ -1,13 +1,12 @@
-from pydoc import text
-
 import nltk
 import re
 import string
-import sys
+import pickle
+import os
 from typing import List, Dict, Any
 import spacy
 
-# Ensure resources are available
+# Ensure NLTK resources are available
 try:
     nltk.data.find('tokenizers/punkt')
     nltk.data.find('corpora/stopwords')
@@ -20,19 +19,29 @@ from nltk.tokenize import word_tokenize, sent_tokenize
 from nltk.corpus import stopwords
 from nltk.stem import PorterStemmer
 
+# Load spaCy for Entity Detection (Task 3.1)
 try:
     nlp = spacy.load("en_core_web_sm")
 except OSError:
     from spacy.cli import download
     download("en_core_web_sm")
     nlp = spacy.load("en_core_web_sm")
+
 class NewsNLPPipeline:
-    def __init__(self):
+    def __init__(self, model_path='results/topic_classifier.pkl'):
         try:
             self.stop_words = set(stopwords.words('english'))
             self.stemmer = PorterStemmer()
+            
+            # Load the Topic Classifier (Task 3.2)
+            if os.path.exists(model_path):
+                with open(model_path, 'rb') as f:
+                    self.topic_model = pickle.load(f)
+            else:
+                self.topic_model = None
+                print(f"Warning: {model_path} not found. Topic detection will be disabled.")
         except Exception as e:
-            print(f"Error initializing NLTK components: {e}")
+            print(f"Error initializing NLP components: {e}")
             self.stop_words = set()
 
     def normalize_text(self, text: str) -> str:
@@ -68,43 +77,62 @@ class NewsNLPPipeline:
         except Exception as e:
             print(f"Error in stemming: {e}")
             return tokens
+
     def extract_organizations(self, text: str) -> list:
         """Task 3.1: Extract ORG entities using SpaCy."""
         if not text: return []
         doc = nlp(text)
-        # Extract only unique Organization names
-        orgs = list({ent.text for ent in doc.ents if ent.label_ == "ORG"})
-        return orgs
-    def process_article(self, raw_body: str) -> Dict[str, Any]:
-        """Task 2.4: Final preprocessing pipeline function."""
+        # Extract unique Organization names
+        return list({ent.text for ent in doc.ents if ent.label_ == "ORG"})
+
+    def predict_topic(self, text: str) -> str:
+        """Task 3.2: Predict topic using the trained model."""
+        if self.topic_model and text:
+            # We pass raw text because the TF-IDF in the pipeline handles its own cleaning
+            prediction = self.topic_model.predict([text])
+            return prediction[0]
+        return "Unknown"
+
+    def process_article(self, raw_body: str, headline: str = "") -> Dict[str, Any]:
+        """Task 2.4 & Phase 3 Integration."""
         try:
             if not raw_body:
-                return {"sentence_count": 0, "clean_tokens": [], "stemmed_tokens": [], "processed_text": ""}
+                return {"sentence_count": 0, "orgs": [], "topic": "Unknown", "processed_text": ""}
 
-            # Sentence Tokenization
+            # Full text for intelligence tasks
+            full_content = f"{headline} {raw_body}".strip()
+
+            # 1. Base Preprocessing (Phase 2)
             sentences = sent_tokenize(raw_body)
-            
-            # Normalization
             normalized = self.normalize_text(raw_body)
-            
-            # Word Tokenization & Stop-word removal
             tokens = self.tokenize_and_remove_stop_words(normalized)
-            
-            # Stemming
             stemmed_tokens = self.apply_stemming(tokens)
+            
+            # 2. Information Extraction (Phase 3)
+            orgs = self.extract_organizations(full_content)
+            topic = self.predict_topic(full_content)
             
             return {
                 "sentence_count": len(sentences),
                 "clean_tokens": tokens,
                 "stemmed_tokens": stemmed_tokens,
-                "processed_text": " ".join(stemmed_tokens)
+                "processed_text": " ".join(stemmed_tokens),
+                "orgs": orgs,
+                "topic": topic
             }
         except Exception as e:
-            print(f"General error in NLP pipeline for article: {e}")
+            print(f"General error in NLP pipeline: {e}")
             return {"error": str(e)}
 
 if __name__ == "__main__":
+    # Ensure you have results/topic_classifier.pkl before running
     pipeline = NewsNLPPipeline()
-    sample = "The Federal Reserve is increasing interest rates. Inflation is running high!"
-    result = pipeline.process_article(sample)
-    print(f"Stemmed Output: {result.get('processed_text')}")
+    
+    sample_headline = "Apple reaches record stock price"
+    sample_body = "The company Apple Inc. reported massive profits today in Cupertino. Tech analysts are impressed."
+    
+    result = pipeline.process_article(sample_body, sample_headline)
+    print(f"--- Analysis Result ---")
+    print(f"Topic: {result['topic']}")
+    print(f"Organizations: {result['orgs']}")
+    print(f"Stemmed Preview: {result['processed_text'][:50]}...")
