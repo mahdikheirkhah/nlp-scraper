@@ -1,5 +1,4 @@
 import os
-import re
 import pandas as pd
 import matplotlib.pyplot as plt
 from sqlalchemy import text
@@ -37,12 +36,13 @@ def generate_plots(df):
     
     # 2. Risk Score Histogram
     plt.figure(figsize=(10, 5))
-    df['Score'].astype(float).plot(kind='hist', bins=20, color='salmon', edgecolor='black')
+    # Using the new descriptive name
+    df['Scandal_Distance_Score'].astype(float).plot(kind='hist', bins=20, color='salmon', edgecolor='black')
     plt.title("Distribution of Scandal Risk Scores")
     plt.xlabel("Score (0.0 - 1.0)")
     plt.savefig("results/risk_distribution.png")
     
-    print("\n📊 Visualizations saved: 'topic_distribution.png' and 'risk_distribution.png'")
+    print("\n📊 Visualizations saved to results folder.")
 
 def enrich_scraped_data():
     try:
@@ -63,7 +63,6 @@ def enrich_scraped_data():
         print(f"📡 Connecting to Snowflake... (Batch Size: {batch_size})")
         
         with engine.connect() as conn:
-            # Using chunksize for memory efficiency
             for chunk_idx, df_chunk in enumerate(pd.read_sql(text(query_raw), conn, chunksize=batch_size)):
                 df_chunk.columns = [c.lower() for c in df_chunk.columns]
                 current_batch_num = chunk_idx + 1
@@ -85,14 +84,14 @@ def enrich_scraped_data():
                         raw_trigger = analysis.get('trigger_sentence', 'N/A')
                         display_trigger = (raw_trigger[:77] + "...") if len(raw_trigger) > 80 else raw_trigger
 
-                        # 3. Store results with all required Phase 5 columns
+                        # 3. Store results 
                         all_results.append({
                             "Headline": headline,
                             "Topic": analysis.get('topic', 'Unknown'),
                             "Entities": ", ".join(analysis.get('orgs', [])),
                             "Sentiment": analysis.get('sentiment', 0),
-                            "Score": analysis.get('scandal_distance', 0),
-                            "Is_Scandal": analysis.get('is_flagged'),
+                            "Scandal_Distance_Score": analysis.get('scandal_distance', 0), # Renamed
+                            "Is_Scandal_Flag": analysis.get('is_flagged'),
                             "Status": "🚩 SCANDAL" if analysis.get('is_flagged') else "✅ Clean",
                             "Evidence": display_trigger,
                             "URL": url,
@@ -100,45 +99,46 @@ def enrich_scraped_data():
                         })
 
                     except Exception as e:
-                        print(f"  ⚠️ Error in Batch {current_batch_num}, row {index}: {e}")
+                        print(f"  ⚠️ Error in Batch {current_batch_num}: {e}")
                         continue
 
         if not all_results:
             print("No data was retrieved from Snowflake.")
             return
 
-        # 4. FINAL DATAFRAME & EXPORT (Task 5.2)
+        # 4. FINAL DATAFRAME & TOP 10 CALCULATION (Task 5.3)
         full_df = pd.DataFrame(all_results)
-        full_df.to_csv(OUTPUT_CSV, index=False)
-        print(f"\n✅ Task 5.2: Exported {len(full_df)} articles to {OUTPUT_CSV}")
+        
+        # Determine Top 10 by the distance score
+        # We find the threshold value for the 10th highest score
+        top_10_threshold = full_df['Scandal_Distance_Score'].nlargest(10).min()
+        
+        # Add the flag as the first column
+        full_df.insert(0, 'Top_10', full_df['Scandal_Distance_Score'] >= top_10_threshold)
 
-        # 5. RISK INTELLIGENCE DASHBOARD (Task 5.1 & 5.3)
+        # Ensure directory exists
+        os.makedirs(os.path.dirname(OUTPUT_CSV), exist_ok=True)
+
+        # 5. EXPORT (Task 5.2)
+        full_df.to_csv(OUTPUT_CSV, index=False)
+        print(f"\n✅ Task 5.2 & 5.3: Exported {len(full_df)} articles to {OUTPUT_CSV}")
+
+        # 6. RISK INTELLIGENCE DASHBOARD (Terminal Output)
         print("\n" + "═"*110)
         print(" " * 40 + "🕵️ FINAL RISK INTELLIGENCE REPORT")
         print("═"*110)
 
-        # Show Top 10 by Risk Score (Task 5.3)
-        top_10 = full_df.sort_values(by="Score", ascending=False).head(10)
+        # Display Top 10 in terminal
+        top_10_display = full_df[full_df['Top_10'] == True].sort_values(by="Scandal_Distance_Score", ascending=False)
         print(f"\n🏆 TOP 10 HIGHEST RISK EXPOSURES IDENTIFIED:")
         print(tabulate(
-            top_10[['Headline', 'Topic', 'Score', 'Status']], 
+            top_10_display[['Headline', 'Topic', 'Scandal_Distance_Score', 'Status']], 
             headers=['Headline', 'Topic', 'Risk Score', 'Result'], 
             tablefmt='fancy_grid', 
             showindex=False
         ))
 
-        # Show detailed evidence for flagged items
-        scandals = full_df[full_df['Is_Scandal'] == True]
-        if not scandals.empty:
-            print(f"\n🚨 CRITICAL EVIDENCE FOR {len(scandals)} FLAGGED SCANDALS:")
-            for i, row in scandals.iterrows():
-                print(f"[{i+1}] {row['Headline'][:80]}")
-                print(f"    Evidence: \"{row['Evidence']}\"")
-                print(f"    Link: {row['URL']}\n")
-        else:
-            print("\n✅ SYSTEM STATUS: No articles crossed both Similarity and Sentiment thresholds.")
-
-        # 6. VISUALIZATION (Task 5.4)
+        # 7. VISUALIZATION (Task 5.4)
         generate_plots(full_df)
 
     except Exception as e:
